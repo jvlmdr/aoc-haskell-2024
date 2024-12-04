@@ -1,5 +1,3 @@
-import Data.List
-
 main :: IO ()
 main = do
     input <- getContents
