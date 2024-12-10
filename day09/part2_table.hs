@@ -88,7 +88,10 @@ insertNode node@(size, (pos, Table subtable)) (Table bySize) =
         -- TODO: Possible to avoid recursing more than necessary here?
         insertHere = Table $ Map.insert size (pos, children) rest where
             (below, rest) = Map.partitionWithKey (\s (p, _) -> p > pos && s <= size) bySize
-            children = foldr insertNode (Table below) (Map.assocs subtable)
+            children
+              | Map.null subtable = Table below
+              | Map.null below = Table subtable
+              | otherwise = foldr insertNode (Table below) (Map.assocs subtable)
 
 -- TODO: Could implement O(n) instead of O(n log n) if list is sorted?
 makeTable :: [Space] -> Table
