@@ -116,17 +116,16 @@ insert x@(pos, size) t =
         -- Insert a new step at this level.
         -- The preceding step may need to be split.
         -- The following steps may be dominated by the new node.
-        r -> y2
-            where
-                (dom, rest) = Map.partitionWithKey (\s (p, _) -> x `dominates` (p, s)) (nodes t)
-                y1 = StepTree $ Map.insert size (pos, StepTree dom) rest
-                y2 = case r of
-                    -- No preceding step.
-                    Nothing -> y1
-                    -- Preceding step must be split.
-                    Just (size', (pos', t')) ->
-                        let y3 = validate "Map.insert removeAfter" $ StepTree $ Map.insert size' (pos', removeAfter pos t') (nodes y1) in
-                        validate "foldr reinsert y3 findAfter" $ foldr reinsert y3 (findAfter pos t')
+        Nothing -> y1
+        -- Preceding step must be split.
+        Just (size', (pos', t')) ->
+            -- Recursively remove nodes after pos.
+            let y2 = validate "Map.insert removeAfter" $ StepTree $ Map.insert size' (pos', removeAfter pos t') (nodes y1) in
+            -- Re-insert the nodes (with their subtrees) into the table.
+            validate "foldr reinsert y2 findAfter" $ foldr reinsert y2 (findAfter pos t')
+    where
+        (dom, rest) = Map.partitionWithKey (\s (p, _) -> x `dominates` (p, s)) (nodes t)
+        y1 = StepTree $ Map.insert size (pos, StepTree dom) rest
 
 -- TODO: Easy way to combine `removeAfter` and `findAfter`?
 
