@@ -184,7 +184,7 @@ moveForward (f_pos, f_size, f_id) t =
 checksum :: [File] -> Integer
 checksum = sum . map (\(pos, size, id) -> sum [pos..pos+size-1] * id)
 
--- -- BEYOND THIS POINT: OPTIONAL UTILS
+-- BEYOND THIS POINT: OPTIONAL UTILS
 
 instance Show StepTree where
     show t = List.intercalate "\n" $ go 0 t where
