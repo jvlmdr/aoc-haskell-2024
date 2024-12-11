@@ -46,12 +46,12 @@ emptyTable = StepTree Map.empty
 insert :: Space -> StepTree -> StepTree
 insert (pos, size) (StepTree sizeIndex) =
     case Map.lookupGE size sizeIndex of
-        -- Larger-or-equal space exists at pos'.
+        -- Larger-or-equal space exists at earlier position.
+        -- Recurse on insertion below this node.
         Just (size', (pos', t')) | pos' < pos ->
-            -- Larger-or-equal space exists at earlier Pos.
-            -- Recurse on insertion below this node.
             StepTree $ Map.adjust (Arrow.second (insert (pos, size))) size' sizeIndex
-        -- No larger-or-equal space exists; insert new node.
+        -- No larger-or-equal space exists at earlier position.
+        -- Insert new node.
         _ -> StepTree $ Map.insert size (pos, StepTree below) rest where
             (below, rest) = Map.partitionWithKey (\s (p, _) -> p > pos && s <= size) sizeIndex
 
@@ -63,7 +63,8 @@ reinsert node@(size, (pos, StepTree subtable)) (StepTree sizeIndex) =
         -- Recurse on insertion below this node.
         Just (size', (pos', t')) | pos' < pos ->
             StepTree $ Map.adjust (Arrow.second (reinsert node)) size' sizeIndex
-        -- No larger-or-equal space before this Pos; insert new node.
+        -- No larger-or-equal space exists at earlier position.
+        -- Insert new node.
         _ ->  StepTree $ Map.insert size (pos, children) rest where
             (below, rest) = Map.partitionWithKey (\s (p, _) -> p > pos && s <= size) sizeIndex
             children
