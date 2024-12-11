@@ -75,34 +75,29 @@ reinsert node@(size, (pos, StepTree subtable)) (StepTree sizeIndex) =
 makeTable :: [Space] -> StepTree
 makeTable = foldr insert emptyTable
 
-pop :: Space -> StepTree -> StepTree
-pop (pos, size) (StepTree sizeIndex) =
-    case Map.lookupGE size sizeIndex of
-        Nothing -> error "element not found"
-        Just (size', (pos', StepTree sizeIndex'))
-            | size == size' && pos == pos' ->
-                -- Remove this node from the table that contains it.
-                -- Insert its children in that table.
-                foldr reinsert (StepTree $ Map.delete size sizeIndex) (Map.assocs sizeIndex')
-            | otherwise ->
-                StepTree $ Map.adjust (Arrow.second (pop (pos, size))) size' sizeIndex
+popGE :: Size -> StepTree -> (Maybe Space, StepTree)
+popGE minSize tree =
+    case Map.lookupGE minSize (sizeIndex tree) of
+        Nothing -> (Nothing, tree)
+        Just (size, (pos, subtree)) -> (Just (pos, size), tree') where
+            tree' = foldr reinsert (StepTree $ Map.delete size $ sizeIndex tree) $ Map.assocs $ sizeIndex subtree
 
--- Files must be provided in reverse order.
+-- Files must be provided in order to be moved.
 compact :: [File] -> StepTree -> [File]
-compact [] table = []
-compact ((f_pos, f_size, f_id) : fs) t =
+compact [] t = []
+compact (f : fs) t = f' : compact fs t' where (f', t') = moveForward f t
+
+moveForward :: File -> StepTree -> (File, StepTree)
+moveForward (f_pos, f_size, f_id) t =
     -- Look for a space to put this file.
-    case Map.lookupGE f_size (sizeIndex t) of
-        -- No space; cannot move file.
-        Nothing -> (f_pos, f_size, f_id) : compact fs t
-        -- There is space; move the file if it's closer.
-        Just (v_size, (v_pos, _))
-            | v_pos < f_pos ->
-                let gap = v_size - f_size
-                    t' = validate "after pop" $ pop (v_pos, v_size) t
-                    t'' = validate "after insert" $ (if gap > 0 then insert (v_pos + f_size, gap) else id) t'
-                in (v_pos, f_size, f_id) : compact fs t''
-            | otherwise -> (f_pos, f_size, f_id) : compact fs t
+    case popGE f_size (validate "before popGE" t) of
+        (Just (v_pos, v_size), t') | v_pos < f_pos ->
+            -- Found large-enough space before file.
+            ((v_pos, f_size, f_id), t'') where
+                d = v_size - f_size
+                t'' = validate "after insert" $
+                    (if d > 0 then insert (v_pos + f_size, d) else id) (validate "after popGE" t')
+        _ -> ((f_pos, f_size, f_id), t)
 
 checksum :: [File] -> Integer
 checksum = sum . map (\(pos, size, id) -> sum [pos..pos+size-1] * id)
