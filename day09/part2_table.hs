@@ -46,44 +46,30 @@ emptyTable = StepTree Map.empty
 insert :: Space -> StepTree -> StepTree
 insert (pos, size) (StepTree sizeIndex) =
     case Map.lookupGE size sizeIndex of
-        -- No larger-or-equal space exists; insert new node.
-        Nothing -> insertHere
         -- Larger-or-equal space exists at pos'.
-        Just (size', (pos', t')) ->
+        Just (size', (pos', t')) | pos' < pos ->
             -- Larger-or-equal space exists at earlier Pos.
             -- Recurse on insertion below this node.
-            if pos' < pos then
-                StepTree $ Map.adjust (Arrow.second (insert (pos, size))) size' sizeIndex
-            -- No larger-or-equal space before this Pos; insert new node.
-            else insertHere
-    where
-        -- When inserting a new node, move the dominated nodes below it.
-        insertHere = StepTree $ Map.insert size (pos, StepTree below) rest where
+            StepTree $ Map.adjust (Arrow.second (insert (pos, size))) size' sizeIndex
+        -- No larger-or-equal space exists; insert new node.
+        _ -> StepTree $ Map.insert size (pos, StepTree below) rest where
             (below, rest) = Map.partitionWithKey (\s (p, _) -> p > pos && s <= size) sizeIndex
 
 -- Assumes that none of the spaces overlap.
-insertNode :: (Size, (Pos, StepTree)) -> StepTree -> StepTree
-insertNode node@(size, (pos, StepTree subtable)) (StepTree sizeIndex) =
+reinsert :: (Size, (Pos, StepTree)) -> StepTree -> StepTree
+reinsert node@(size, (pos, StepTree subtable)) (StepTree sizeIndex) =
     case Map.lookupGE size sizeIndex of
-        -- No larger-or-equal space exists; insert new node.
-        Nothing -> insertHere
-        -- Larger-or-equal space exists at pos'.
-        Just (size', (pos', t')) ->
-            -- Larger-or-equal space exists at earlier Pos.
-            -- Recurse on insertion below this node.
-            if pos' < pos then
-                StepTree $ Map.adjust (Arrow.second (insertNode node)) size' sizeIndex
-            -- No larger-or-equal space before this Pos; insert new node.
-            else insertHere
-    where
-        -- When inserting a new node, move the dominated nodes below it.
-        -- TODO: Possible to avoid recursing more than necessary here?
-        insertHere = StepTree $ Map.insert size (pos, children) rest where
+        -- Larger-or-equal space exists at pos' < pos.
+        -- Recurse on insertion below this node.
+        Just (size', (pos', t')) | pos' < pos ->
+            StepTree $ Map.adjust (Arrow.second (reinsert node)) size' sizeIndex
+        -- No larger-or-equal space before this Pos; insert new node.
+        _ ->  StepTree $ Map.insert size (pos, children) rest where
             (below, rest) = Map.partitionWithKey (\s (p, _) -> p > pos && s <= size) sizeIndex
             children
-              | Map.null subtable = StepTree below
-              | Map.null below = StepTree subtable
-              | otherwise = foldr insertNode (StepTree below) (Map.assocs subtable)
+                | Map.null subtable = StepTree below
+                | Map.null below = StepTree subtable
+                | otherwise = foldr reinsert (StepTree below) (Map.assocs subtable)
 
 -- TODO: Could implement O(n) instead of O(n log n) if list is sorted?
 makeTable :: [Space] -> StepTree
@@ -93,12 +79,12 @@ pop :: Space -> StepTree -> StepTree
 pop (pos, size) (StepTree sizeIndex) =
     case Map.lookupGE size sizeIndex of
         Nothing -> error "element not found"
-        Just (size', (pos', StepTree sizeIndex')) ->
-            if size == size' && pos == pos' then
+        Just (size', (pos', StepTree sizeIndex'))
+            | size == size' && pos == pos' ->
                 -- Remove this node from the table that contains it.
                 -- Insert its children in that table.
-                foldr insertNode (StepTree $ Map.delete size sizeIndex) (Map.assocs sizeIndex')
-            else
+                foldr reinsert (StepTree $ Map.delete size sizeIndex) (Map.assocs sizeIndex')
+            | otherwise ->
                 StepTree $ Map.adjust (Arrow.second (pop (pos, size))) size' sizeIndex
 
 -- Files must be provided in reverse order.
@@ -110,15 +96,13 @@ compact ((f_pos, f_size, f_id) : fs) t =
         -- No space; cannot move file.
         Nothing -> (f_pos, f_size, f_id) : compact fs t
         -- There is space; move the file if it's closer.
-        Just (v_size, (v_pos, _)) ->
-            if v_pos < f_pos then
-                (v_pos, f_size, f_id) : compact fs t''
-            else
-                (f_pos, f_size, f_id) : compact fs t
-            where
-                gap = v_size - f_size
-                t' = validate "after pop" $ pop (v_pos, v_size) t
-                t'' = (if gap > 0 then insert (v_pos + f_size, gap) else id) t'
+        Just (v_size, (v_pos, _))
+            | v_pos < f_pos ->
+                let gap = v_size - f_size
+                    t' = validate "after pop" $ pop (v_pos, v_size) t
+                    t'' = validate "after insert" $ (if gap > 0 then insert (v_pos + f_size, gap) else id) t'
+                in (v_pos, f_size, f_id) : compact fs t''
+            | otherwise -> (f_pos, f_size, f_id) : compact fs t
 
 checksum :: [File] -> Integer
 checksum = sum . map (\(pos, size, id) -> sum [pos..pos+size-1] * id)
@@ -157,9 +141,10 @@ errcheck tree
         orderIsOk _ = True
 
 validate :: String -> StepTree -> StepTree
-validate name t = case errcheck t of
-    -- Just err -> error $ "invalid tree: " ++ name ++ ": " ++ err
-    _ -> t
+validate _ = id  -- Disable assumption checking.
+-- validate name t = case errcheck t of
+--     Just err -> error $ "invalid tree: " ++ name ++ ": " ++ err
+--     _ -> t
 
 inOrder :: StepTree -> [Space]
 inOrder (StepTree m) = concatMap inOrderAssoc $ Map.assocs m where
