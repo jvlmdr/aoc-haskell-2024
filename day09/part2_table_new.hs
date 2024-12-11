@@ -120,9 +120,9 @@ insert x@(pos, size) t =
         -- Preceding step must be split.
         Just (size', (pos', t')) ->
             -- Recursively remove nodes after pos.
-            let y2 = validate "Map.insert removeAfter" $ StepTree $ Map.insert size' (pos', removeAfter pos t') (nodes y1) in
+            let y2 = StepTree $ Map.insert size' (pos', removeAfter pos t') (nodes y1) in
             -- Re-insert the nodes (with their subtrees) into the table.
-            validate "foldr reinsert y2 findAfter" $ foldr reinsert y2 (findAfter pos t')
+            foldr reinsert y2 (findAfter pos t')
     where
         (dom, rest) = Map.partitionWithKey (\s (p, _) -> x `dominates` (p, s)) (nodes t)
         y1 = StepTree $ Map.insert size (pos, StepTree dom) rest
@@ -173,7 +173,7 @@ compact (f : fs) t = f' : compact fs t' where (f', t') = moveForward f t
 moveForward :: File -> StepTree -> (File, StepTree)
 moveForward (f_pos, f_size, f_id) t =
     -- Look for a space to put this file.
-    case popGE f_size (validate "before popGE" t) of
+    case popGE f_size t of
     (Just (v_pos, v_size), t') | v_pos < f_pos ->
         -- Found large-enough space before file.
         ((v_pos, f_size, f_id), validate "after insert" t'') where
@@ -219,7 +219,7 @@ errcheck tree
 validate :: String -> StepTree -> StepTree
 validate _ = id
 -- validate name t = case errcheck t of
---     Just err -> error $ "not ok: " ++ name ++ ": " ++ err
+--     Just err -> error $ "invalid tree: " ++ name ++ ": " ++ err
 --     _ -> t
 
 inOrder :: StepTree -> [Space]
