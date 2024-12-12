@@ -31,13 +31,13 @@ makeFileList = go 0 0 where
     go pos id (n1 : n2 : xs) = (pos, n1, id) : go (pos + n1 + n2) (id + 1) xs
 
 makeSpaceList :: [File] -> [Space]
-makeSpaceList fs = catMaybes $ zipWith diff fs (tail fs) where
-    diff :: File -> File -> Maybe Space
-    diff (p1, s1, _) (p2, _, _)
+makeSpaceList fs = catMaybes $ zipWith go fs (tail fs) where
+    go :: File -> File -> Maybe Space
+    go (p1, s1, _) (p2, _, _)
         | p1 + s1 < p2 = Just (p1 + s1, p2 - p1 - s1)
         | otherwise = Nothing
 
--- Like Maybe but with a maximum value that implements Ord.
+-- Like Maybe but with a Nothing value larger than all others.
 data WithTop a = Finite a | Top deriving (Eq, Show)
 
 instance Ord a => Ord (WithTop a) where
@@ -122,6 +122,41 @@ makeTree = fromAssocs . fst . popNodesUnder Top where
             (children, rest) = popNodesUnder (Finite s) xs
             (siblings, rest') = popNodesUnder size rest
 
+insert :: Space -> StepTree -> StepTree
+insert x@(pos, size) = fromAssocs . go . assocs where
+    go :: [(Space, StepTree)] -> [(Space, StepTree)]
+    go [] = [(x, empty)]
+    go ((kA@(posA, sizeA), treeA) : xs)
+        -- The whole interval is to the left (before) pos.
+        -- Leave this node untouched and continue.
+        | posB <= Finite pos = (kA, treeA) : go xs
+        -- The whole interval and those after it are to the right (after) pos.
+        -- Add a new node at the start.
+        -- Remaining nodes go below it or after it.
+        -- TODO: Duplication here. Can this be re-used for the otherwise case?
+        | pos < posA = let
+            (xsBelow, xsAfter) = break (\((_, s), _) -> s > size) ((kA, treeA) : xs)
+            in (x, fromAssocs xsBelow) : xsAfter
+        -- The position occurs within the interval; posA <= pos < posB.
+        | otherwise =
+            -- If its size is less than that of the interval, recurse into this node.
+            if sizeA >= size then (kA, insert x treeA) : xs
+            -- Otherwise, insert a new node here.
+            -- Split the current interval.
+            -- The remaining nodes either go below or after.
+            -- Create a tree with a single new node and reinsert
+            -- subtrees from split and from rest of list into it.
+            else let
+                -- (treeA', restA) = split pos treeA
+                -- treeRest = foldr reinsert (singleton x) (restA ++ xs)
+                -- in (kA, treeA') : assocs treeRest
+                (treeA', restA) = split pos treeA
+                (xsBelow, xsAfter) = break (\((_, s), _) -> s > size) xs
+                treeX = foldr reinsert (fromAssocs xsBelow) restA
+                in (kA, treeA') : (x, treeX) : xsAfter
+        where
+            posB = headPos xs
+
 headPos :: [(Space, StepTree)] -> WithTop Pos
 headPos [] = Top
 headPos (((pos, _), _) : _) = Finite pos
@@ -178,54 +213,21 @@ reinsert x@((pos, size), subtree) = fromAssocs . go . assocs where
         where
             posB = headPos xs
 
-insert :: Space -> StepTree -> StepTree
-insert x@(pos, size) = fromAssocs . go . assocs where
-    go :: [(Space, StepTree)] -> [(Space, StepTree)]
-    go [] = [(x, empty)]
-    go ((kA@(posA, sizeA), treeA) : xs)
-        -- The whole interval is to the left (before) pos.
-        -- Leave this node untouched and continue.
-        | posB <= Finite pos = (kA, treeA) : go xs
-        -- The whole interval and those after it are to the right (after) pos.
-        -- Add a new node at the start.
-        -- Remaining nodes go below it or after it.
-        -- TODO: Duplication here. Can this be re-used for the otherwise case?
-        | pos < posA = let
-            (xsBelow, xsAfter) = break (\((_, s), _) -> s > size) ((kA, treeA) : xs)
-            in (x, fromAssocs xsBelow) : xsAfter
-        -- The position occurs within the interval; posA <= pos < posB.
-        | otherwise =
-            -- If its size is less than that of the interval, recurse into this node.
-            if sizeA >= size then (kA, insert x treeA) : xs
-            -- Otherwise, insert a new node here.
-            -- Split the current interval.
-            -- The remaining nodes either go below or after.
-            -- Create a tree with a single new node and reinsert
-            -- subtrees from split and from rest of list into it.
-            else let
-                -- (treeA', restA) = split pos treeA
-                -- treeRest = foldr reinsert (singleton x) (restA ++ xs)
-                -- in (kA, treeA') : assocs treeRest
-                (treeA', restA) = split pos treeA
-                (xsBelow, xsAfter) = break (\((_, s), _) -> s > size) xs
-                treeX = foldr reinsert (fromAssocs xsBelow) restA
-                in (kA, treeA') : (x, treeX) : xsAfter
-        where
-            posB = headPos xs
-
-findPop :: (a -> Bool) -> [a] -> (Maybe a, [a])
-findPop _ [] = (Nothing, [])
-findPop p (x : xs)
-    | p x = (Just x, xs)
-    | otherwise = let (y, ys) = findPop p xs in (y, x : ys)
-
 popGE :: Size -> StepTree -> (Maybe Space, StepTree)
 popGE minSize tree =
     -- Find first element that is larger or equal to minSize.
-    case findPop (\((_, s), _) -> s >= minSize) (assocs tree) of
+    case deleteFind (\((_, s), _) -> s >= minSize) (assocs tree) of
         (Nothing, _) -> (Nothing, tree)
         (Just (x, subtree), xs') -> (Just x, tree') where
             tree' = foldr reinsert (fromAssocs xs') $ assocs subtree
+
+-- Find the first element in a list that satsifies a predicate.
+-- Return it (or Nothing) and the list with it removed.
+deleteFind :: (a -> Bool) -> [a] -> (Maybe a, [a])
+deleteFind _ [] = (Nothing, [])
+deleteFind p (x : xs)
+    | p x = (Just x, xs)
+    | otherwise = let (y, ys) = deleteFind p xs in (y, x : ys)
 
 -- Returns the resultant list of files and space tree.
 compact :: [File] -> StepTree -> ([File], StepTree)
@@ -268,17 +270,17 @@ showGraph t = List.intercalate "\n" $ go 0 t where
         showEntry ((pos, size), t) =
             (indent depth ++ show (size, pos)) : go (depth + 1) t
 
-nodeCount :: StepTree -> Int
-nodeCount = sum . map (\((p, s), t) -> List.length (assocs t) + nodeCount t) . assocs
-
-volume :: StepTree -> Integer
-volume = sum . map (\((p, s), t) -> s + volume t) . assocs
-
 instance Show StepTree where
     show :: StepTree -> String
     show t = "StepTree{" ++ List.intercalate ", " (map showAssoc (assocs t)) ++ "}" where
         showAssoc :: (Space, StepTree) -> String
         showAssoc (k, t) = show k ++ "[" ++ show (volume t) ++ "/" ++ show (nodeCount t) ++ "]"
+
+volume :: StepTree -> Integer
+volume = sum . map (\((p, s), t) -> s + volume t) . assocs
+
+nodeCount :: StepTree -> Int
+nodeCount = sum . map (\((p, s), t) -> List.length (assocs t) + nodeCount t) . assocs
 
 -- Check that a tree is valid.
 -- In-order traversal must have increasing index.
