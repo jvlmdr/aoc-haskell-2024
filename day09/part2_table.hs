@@ -82,12 +82,12 @@ instance Ord a => Ord (WithTop a) where
 -- but we shouldn't need to recurse down the subtree.
 --
 -- This tree can be visualized as a sequence of intervals:
---        +--------------------
---        |
---        |                 +--
---    +---|                 |
---    |   |        +----+---|
--- 0123456789012345678901234567
+--    .   +====================··
+--    .   ‖        ·        ·
+--    .   ‖        ·        +==··
+--    +===‖        ·        ‖
+--    ‖   ‖        +====+===‖
+-- 012345678901234567890123456789
 --
 -- We call it a StepTree because each level contains the
 -- step increases in interval size.
