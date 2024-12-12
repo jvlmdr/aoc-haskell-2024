@@ -16,20 +16,20 @@ main = do
     let files = makeFileList $ map (toInteger . digitToInt) input
     -- print files
     let tree = makeTree $ makeSpaceList files
-    putStrLn $ showGraph tree ++ "\n"
-    -- print $ fst $ split 5 tree
-    -- print $ snd $ split 5 tree
-    putStrLn $ showGraph (insert (40,4) tree) ++ "\n"
-    putStrLn $ showGraph (insert (18,2) tree) ++ "\n"
-    putStrLn $ showGraph (insert (1,6) tree) ++ "\n"
-    -- print $ makeTable $ makeFileList $ map (toInteger . digitToInt) input
-    -- print $ checksum $ compact (reverse files) (makeTable $ makeSpaceList files)
+    -- putStrLn $ showGraph tree ++ "\n"
+    -- putStrLn $ List.intercalate "\n\n" $
+    --     zipWith (\f (f', t) -> show f ++ " -> " ++ show f' ++ "\n" ++ showGraph t)
+    --         (reverse files) (compactScan (reverse files) tree)
+    let (files', tree') = compact (reverse files) (makeTree $ makeSpaceList files)
+    -- print $ List.sort files'
+    -- putStrLn $ showGraph tree' ++ "\n"
+    print $ checksum files'
 
 type Pos = Integer
 type Size = Integer
 type Id = Integer
-type File = (Pos, Size, Id)
 type Space = (Pos, Size)
+type File = (Pos, Size, Id)
 
 makeFileList :: [Size] -> [File]
 makeFileList = go 0 0 where
@@ -108,22 +108,6 @@ dominates (pos, size) (p, s) = pos < p && size >= s
 assocs :: StepTree -> [(Space, StepTree)]
 assocs = map (\(s, (p, t)) -> ((p, s), t)) . Map.assocs . nodes
 
--- Returns the (pos, size) pairs defining the steps at this level.
-steps :: StepTree -> [Space]
-steps = map fst . assocs
-
--- intervals :: StepTree -> [((Space, StepTree), WithTop Pos)]
--- intervals tree = zip xs $ tail (map Finite ps ++ [Top]) where
---     xs = assocs tree
---     ps = map (fst . fst) xs
-
--- intervals = go . assocs where
---     go :: [(Space, StepTree)] -> [((Space, StepTree), WithTop Pos)]
---     go [] = []
---     go (x : xs) = case xs of
---         [] -> [(x, Top)]
---         ((p', _), _) : _ -> (x, Finite p') : go xs
-
 fromAssocs :: [(Space, StepTree)] -> StepTree
 fromAssocs = StepTree . Map.fromList . map (\((p, s), t) -> (s, (p, t)))
 
@@ -184,6 +168,7 @@ split pos tree = (fromAssocs a1, a2) where
 -- Inserts a whole subtree at the correct location.
 -- Its topology must be consistent with the rest of the tree.
 -- That is, no need to split or move any nodes.
+-- TODO: Efficient version that reinserts all elements in an ordered list in one pass?
 reinsert :: (Space, StepTree) -> StepTree -> StepTree
 reinsert x@((pos, size), subtree) = fromAssocs . go . assocs where
     go :: [(Space, StepTree)] -> [(Space, StepTree)]
@@ -193,9 +178,10 @@ reinsert x@((pos, size), subtree) = fromAssocs . go . assocs where
         -- Leave this node untouched and continue.
         | posB <= Finite pos = (kA, treeA) : go xs
         -- The whole interval and those after it are to the right (after) pos.
-        | pos < posA = (kA, treeA) : xs
+        -- Insert the node before the remaining elements.
+        | pos < posA = x : (kA, treeA) : xs
         -- The position occurs within the interval; posA <= pos < posB.
-        | posA <= pos =
+        | otherwise =
             -- If its size is less than that of the interval, add below the node.
             if sizeA >= size then (kA, reinsert x treeA) : xs
             -- Otherwise, the node and its subtree go here.
@@ -211,7 +197,6 @@ insert x@(pos, size) = fromAssocs . go . assocs where
     go ((kA@(posA, sizeA), treeA) : xs)
         -- The whole interval is to the left (before) pos.
         -- Leave this node untouched and continue.
-        -- TODO: Remove intervals and just add a peek function.
         | posB <= Finite pos = (kA, treeA) : go xs
         -- The whole interval and those after it are to the right (after) pos.
         -- Add a new node at the start.
@@ -229,7 +214,6 @@ insert x@(pos, size) = fromAssocs . go . assocs where
             -- The remaining nodes either go below or after.
             -- Create a tree with a single new node and reinsert
             -- subtrees from split and from rest of list into it.
-            -- TODO: Only need to consider rest of list until larger size.
             else let
                 -- (treeA', restA) = split pos treeA
                 -- treeRest = foldr reinsert (singleton x) (restA ++ xs)
@@ -241,8 +225,46 @@ insert x@(pos, size) = fromAssocs . go . assocs where
         where
             posB = headPos xs
 
+popGE :: Size -> StepTree -> (Maybe Space, StepTree)
+popGE minSize tree =
+    -- TODO: Minor gain using Map. Replace completely with List?
+    case Map.lookupGE minSize (nodes tree) of
+        Nothing -> (Nothing, tree)
+        Just (size, (pos, subtree)) -> (Just (pos, size), tree'') where
+            -- Delete the node at this level; reinsert its subtrees.
+            tree' = StepTree $ Map.delete size (nodes tree)
+            tree'' = foldr reinsert tree' $ assocs subtree
+
+-- Returns the resultant list of files and space tree.
+compact :: [File] -> StepTree -> ([File], StepTree)
+compact [] t = ([], t)
+compact (f : fs) tree = (f' : fs', treeFinal) where
+    (f', treeNext) = moveForward f tree
+    (fs', treeFinal) = compact fs treeNext
+
+moveForward :: File -> StepTree -> (File, StepTree)
+moveForward (f_pos, f_size, f_id) t =
+    -- Look for a space to put this file.
+    case popGE f_size t of
+    (Just (v_pos, v_size), t') | v_pos < f_pos ->
+        -- Found large-enough space before file.
+        ((v_pos, f_size, f_id), validate "after insert" t'') where
+            d = v_size - f_size
+            t'' = (if d > 0 then insert (v_pos + f_size, d) else id) (validate "after popGE" t')
+    _ -> ((f_pos, f_size, f_id), t)
+
+checksum :: [File] -> Integer
+checksum = sum . map (\(pos, size, id) -> sum [pos..pos+size-1] * id)
 
 -- BEYOND THIS POINT: OPTIONAL UTILS
+
+-- Yields the series of steps involved in compacting.
+compactScan :: [File] -> StepTree -> [(File, StepTree)]
+compactScan fs t = List.unfoldr go (fs, t) where
+    go :: ([File], StepTree) -> Maybe ((File, StepTree), ([File], StepTree))
+    go ([], _) = Nothing
+    go (f : fs, t) = Just ((f', t'), (fs, t')) where
+        (f', t') = moveForward f t
 
 showGraph :: StepTree -> String
 showGraph t = List.intercalate "\n" $ go 0 t where
@@ -254,14 +276,17 @@ showGraph t = List.intercalate "\n" $ go 0 t where
         showEntry (size, (pos, t)) =
             (indent depth ++ show (size, pos)) : go (depth + 1) t
 
-size :: StepTree -> Integer
-size = (1 +) . sum . map (size . snd) . assocs
+nodeCount :: StepTree -> Int
+nodeCount = sum . map (\((p, s), t) -> Map.size (nodes t) + nodeCount t) . assocs
+
+volume :: StepTree -> Integer
+volume = sum . map (\((p, s), t) -> s + volume t) . assocs
 
 instance Show StepTree where
     show :: StepTree -> String
     show t = "StepTree{" ++ List.intercalate ", " (map showAssoc (assocs t)) ++ "}" where
         showAssoc :: (Space, StepTree) -> String
-        showAssoc (k, t) = show k ++ "[" ++ show (size t) ++ "]"
+        showAssoc (k, t) = show k ++ "[" ++ show (volume t) ++ "/" ++ show (nodeCount t) ++ "]"
 
 -- Check that a tree is valid.
 -- In-order traversal must have increasing index.
