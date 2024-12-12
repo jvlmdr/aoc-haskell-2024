@@ -1,14 +1,8 @@
-{-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
-{-# HLINT ignore "Use newtype instead of data" #-}
 import Data.Char (digitToInt)
-import Data.Function (on)
 import Data.Maybe (catMaybes)
-import qualified Control.Arrow as Arrow
 import qualified Data.List as List
 import qualified Data.Map as Map
-import qualified Data.Set as Set
 import Data.Map (Map)
-import Data.Set (Set)
 
 main :: IO ()
 main = do
@@ -97,8 +91,7 @@ instance Ord a => Ord (WithTop a) where
 --
 -- We call it a StepTree because each level contains the
 -- step increases in interval size.
-data StepTree = StepTree
-    { nodes :: Map Size (Pos, StepTree) }
+newtype StepTree = StepTree { nodes :: Map Size (Pos, StepTree) }
 
 -- One space dominates another if it occurs earlier and is larger-or-equal in size.
 dominates :: Space -> Space -> Bool
