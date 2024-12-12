@@ -1,8 +1,6 @@
 import Data.Char (digitToInt)
 import Data.Maybe (catMaybes)
 import qualified Data.List as List
-import qualified Data.Map as Map
-import Data.Map (Map)
 
 main :: IO ()
 main = do
@@ -81,7 +79,8 @@ instance Ord a => Ord (WithTop a) where
 -- We may need to recurse down the preceding node,
 -- but we shouldn't need to recurse down the subtree.
 --
--- This tree can be visualized as a sequence of intervals:
+-- This tree can be visualized as a nested sequences of steps,
+-- with each step having a corresponding interval.
 --    .   +====================··
 --    .   ‖        ·        ·
 --    .   ‖        ·        +==··
@@ -91,21 +90,17 @@ instance Ord a => Ord (WithTop a) where
 --
 -- We call it a StepTree because each level contains the
 -- step increases in interval size.
-newtype StepTree = StepTree { nodes :: Map Size (Pos, StepTree) }
+newtype StepTree = StepTree { assocs :: [(Space, StepTree)] }
 
 -- One space dominates another if it occurs earlier and is larger-or-equal in size.
 dominates :: Space -> Space -> Bool
 dominates (pos, size) (p, s) = pos < p && size >= s
 
--- Returns the (space, subtree) pairs of the steps at this level.
-assocs :: StepTree -> [(Space, StepTree)]
-assocs = map (\(s, (p, t)) -> ((p, s), t)) . Map.assocs . nodes
-
 fromAssocs :: [(Space, StepTree)] -> StepTree
-fromAssocs = StepTree . Map.fromList . map (\((p, s), t) -> (s, (p, t)))
+fromAssocs = StepTree
 
 empty :: StepTree
-empty = StepTree Map.empty
+empty = StepTree []
 
 singleton :: Space -> StepTree
 singleton x = fromAssocs [(x, empty)]
@@ -218,15 +213,19 @@ insert x@(pos, size) = fromAssocs . go . assocs where
         where
             posB = headPos xs
 
+findPop :: (a -> Bool) -> [a] -> (Maybe a, [a])
+findPop _ [] = (Nothing, [])
+findPop p (x : xs)
+    | p x = (Just x, xs)
+    | otherwise = let (y, ys) = findPop p xs in (y, x : ys)
+
 popGE :: Size -> StepTree -> (Maybe Space, StepTree)
 popGE minSize tree =
-    -- TODO: Minor gain using Map. Replace completely with List?
-    case Map.lookupGE minSize (nodes tree) of
-        Nothing -> (Nothing, tree)
-        Just (size, (pos, subtree)) -> (Just (pos, size), tree'') where
-            -- Delete the node at this level; reinsert its subtrees.
-            tree' = StepTree $ Map.delete size (nodes tree)
-            tree'' = foldr reinsert tree' $ assocs subtree
+    -- Find first element that is larger or equal to minSize.
+    case findPop (\((_, s), _) -> s >= minSize) (assocs tree) of
+        (Nothing, _) -> (Nothing, tree)
+        (Just (x, subtree), xs') -> (Just x, tree') where
+            tree' = foldr reinsert (fromAssocs xs') $ assocs subtree
 
 -- Returns the resultant list of files and space tree.
 compact :: [File] -> StepTree -> ([File], StepTree)
@@ -264,13 +263,13 @@ showGraph t = List.intercalate "\n" $ go 0 t where
     indent :: Int -> String
     indent n = replicate (n * 2) ' '
     go :: Int -> StepTree -> [String]
-    go depth (StepTree nodes) = concatMap showEntry (Map.assocs nodes) where
-        showEntry :: (Size, (Pos, StepTree)) -> [String]
-        showEntry (size, (pos, t)) =
+    go depth tree = concatMap showEntry (assocs tree) where
+        showEntry :: (Space, StepTree) -> [String]
+        showEntry ((pos, size), t) =
             (indent depth ++ show (size, pos)) : go (depth + 1) t
 
 nodeCount :: StepTree -> Int
-nodeCount = sum . map (\((p, s), t) -> Map.size (nodes t) + nodeCount t) . assocs
+nodeCount = sum . map (\((p, s), t) -> List.length (assocs t) + nodeCount t) . assocs
 
 volume :: StepTree -> Integer
 volume = sum . map (\((p, s), t) -> s + volume t) . assocs
@@ -305,6 +304,6 @@ validate _ = id
 --     _ -> t
 
 inOrder :: StepTree -> [Space]
-inOrder (StepTree m) = concatMap inOrderAssoc $ Map.assocs m where
-    inOrderAssoc :: (Size, (Pos, StepTree)) -> [Space]
-    inOrderAssoc (size, (pos, t)) = (pos, size) : inOrder t
+inOrder tree = concatMap inOrderAssoc $ assocs tree where
+    inOrderAssoc :: ((Pos, Size), StepTree) -> [Space]
+    inOrderAssoc ((pos, size), t) = (pos, size) : inOrder t
